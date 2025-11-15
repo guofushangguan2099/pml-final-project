@@ -96,18 +96,24 @@ if project_root not in sys.path:
 
 from src.dataset import load_and_prepare_data
 
+
 if __name__ == '__main__':
-    # 首先加载数据
-    dataframe = load_and_prepare_data('final.csv')
-    
+    # ... (前面的代码不变) ...
+    dataframe = load_and_prepare_data('data\\final.csv')
     if dataframe is not None:
-        # 然后进行预处理
         processed_df, mod_vocab, shk_vocab = preprocess_data(dataframe)
         
         print("\n--- Preprocessing Complete ---")
-        # 确保 'data/' 目录存在
         if not os.path.exists('data'):
             os.makedirs('data')
-        # 保存处理后的数据以备后用
+            
         processed_df.to_pickle('data/processed_data.pkl')
         print("Processed DataFrame saved to 'data/processed_data.pkl'")
+
+        # --- 新增部分：保存词汇表 ---
+        import pickle
+        with open('data/modern_vocab.pkl', 'wb') as f:
+            pickle.dump(mod_vocab, f)
+        with open('data/shakespearean_vocab.pkl', 'wb') as f:
+            pickle.dump(shk_vocab, f)
+        print("Vocabularies saved to 'data/' directory.")
