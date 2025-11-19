@@ -106,72 +106,131 @@ def epoch_time(start_time, end_time):
 def run_training():
     print("--- Starting Training Process ---")
     print(f"Device: {DEVICE}")
-
-    # 加载数据和词汇表
+    
+    # 1. 加载数据与词汇表
     print("Loading data and vocabularies...")
     df = pd.read_pickle(DATA_PATH)
+    
     with open('data/modern_vocab.pkl', 'rb') as f:
         modern_vocab = pickle.load(f)
     with open('data/shakespearean_vocab.pkl', 'rb') as f:
         shakespearean_vocab = pickle.load(f)
-
+        
+    # 根据词汇表设置输入输出维度
     INPUT_DIM = modern_vocab.n_words
     OUTPUT_DIM = shakespearean_vocab.n_words
     PAD_IDX = modern_vocab.word2idx['<pad>']
+    
+    print(f"Vocab Sizes - Input: {INPUT_DIM}, Output: {OUTPUT_DIM}")
 
-    # 创建 DataLoader
-    # 为了演示，我们简单地将数据分为训练集和验证集 (80/20)
-    train_size = int(0.8 * len(df))
-    train_df = df[:train_size]
-    valid_df = df[train_size:]
+    # 2. 数据划分 (70% Train, 15% Val, 15% Test)
+    #先打乱数据，确保随机性
+    df = df.sample(frac=1, random_state=42).reset_index(drop=True)
+    
+    n_total = len(df)
+    n_train = int(n_total * 0.70)
+    n_val = int(n_total * 0.15)
+    # 剩下的给测试集
+    
+    train_df = df.iloc[:n_train]
+    valid_df = df.iloc[n_train : n_train + n_val]
+    test_df = df.iloc[n_train + n_val :]
+    
+    print(f"\nData Split Result:")
+    print(f"  Training Set:   {len(train_df)} samples")
+    print(f"  Validation Set: {len(valid_df)} samples")
+    print(f"  Test Set:       {len(test_df)} samples")
 
+    # 3. 创建 DataLoader
     train_dataset = TranslationDataset(train_df)
     valid_dataset = TranslationDataset(valid_df)
-    
-    collate_fn = create_collate_fn(PAD_IDX)
+    test_dataset = TranslationDataset(test_df) # 新增测试集
 
+    collate_fn = create_collate_fn(PAD_IDX)
+    
     train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
     valid_dataloader = DataLoader(valid_dataset, batch_size=BATCH_SIZE, collate_fn=collate_fn)
-    print(f"Train batches: {len(train_dataloader)}, Validation batches: {len(valid_dataloader)}")
+    test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, collate_fn=collate_fn)
 
-    # 初始化模型
-    print("Initializing model...")
+    # 4. 初始化模型
+    print("\nInitializing model...")
     attn = Attention(HIDDEN_DIM)
     enc = Encoder(INPUT_DIM, EMBEDDING_DIM, HIDDEN_DIM, N_LAYERS, DROPOUT)
     dec = Decoder(OUTPUT_DIM, EMBEDDING_DIM, HIDDEN_DIM, N_LAYERS, DROPOUT, attn)
     model = Seq2Seq(enc, dec, DEVICE).to(DEVICE)
     
-    # 定义优化器和损失函数
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    criterion = nn.CrossEntropyLoss(ignore_index=PAD_IDX) # 忽略填充标记的损失
+    # 初始化参数权重 (推荐步骤，有助于模型收敛)
+    def init_weights(m):
+        for name, param in m.named_parameters():
+            if 'weight' in name:
+                nn.init.normal_(param.data, mean=0, std=0.01)
+            else:
+                nn.init.constant_(param.data, 0)
+    model.apply(init_weights)
+    print(f"Model initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad):,} trainable parameters.")
 
+    # 5. 定义优化器和损失函数
+    # ✅ 关键修改：添加 weight_decay=1e-5 进行正则化
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
+    criterion = nn.CrossEntropyLoss(ignore_index=PAD_IDX)
+
+    # 6. 训练循环 (含早停机制)
     best_valid_loss = float('inf')
-
-    # 开始训练循环
-    print("\n--- Starting Epochs ---")
+    PATIENCE = 3      # ✅ 早停耐心值：如果验证集3次没有变好就停止
+    patience_counter = 0
+    
+    print("\n--- Starting Epochs (with Early Stopping) ---")
     for epoch in range(N_EPOCHS):
         start_time = time.time()
         
         print(f"Epoch {epoch+1}/{N_EPOCHS}")
+        
+        # 训练和验证
         train_loss = train_fn(model, train_dataloader, optimizer, criterion, CLIP)
         valid_loss = evaluate_fn(model, valid_dataloader, criterion)
         
         end_time = time.time()
-        
         epoch_mins, epoch_secs = epoch_time(start_time, end_time)
         
-        # 如果当前验证损失是最好的，则保存模型
+        # 计算 PPL
+        train_ppl = math.exp(train_loss)
+        val_ppl = math.exp(valid_loss)
+        
+        # --- 早停与模型保存逻辑 ---
         if valid_loss < best_valid_loss:
             best_valid_loss = valid_loss
+            patience_counter = 0 # 重置计数器
             torch.save(model.state_dict(), MODEL_SAVE_PATH)
+            save_msg = "✅ Model Saved (New Best)"
+        else:
+            patience_counter += 1
+            save_msg = f"⚠️ No Improvement ({patience_counter}/{PATIENCE})"
         
-        print(f'Epoch: {epoch+1:02} | Time: {epoch_mins}m {epoch_secs}s')
-        print(f'\tTrain Loss: {train_loss:.3f} | Train PPL: {math.exp(train_loss):7.3f}')
-        print(f'\t Val. Loss: {valid_loss:.3f} |  Val. PPL: {math.exp(valid_loss):7.3f}')
+        print(f'Epoch: {epoch+1:02} | Time: {epoch_mins}m {epoch_secs}s | {save_msg}')
+        print(f'\tTrain Loss: {train_loss:.3f} | Train PPL: {train_ppl:7.3f}')
+        print(f'\t Val. Loss: {valid_loss:.3f} |  Val. PPL: {val_ppl:7.3f}')
+        
+        # 触发早停
+        if patience_counter >= PATIENCE:
+            print(f"\n🛑 Early stopping triggered! Best validation loss was {best_valid_loss:.3f}")
+            break
 
-    print("\n--- Training Finished ---")
-    print(f"Best validation loss: {best_valid_loss:.3f}")
-    print(f"Model saved to {MODEL_SAVE_PATH}")
+    # 7. 最终测试 (Test Set Evaluation)
+    print("\n--- Training Finished. Evaluating on Independent Test Set ---")
+    # 加载保存的最佳模型 (防止使用的是最后一次过拟合的参数)
+    model.load_state_dict(torch.load(MODEL_SAVE_PATH))
+    
+    test_loss = evaluate_fn(model, test_dataloader, criterion)
+    test_ppl = math.exp(test_loss)
+    
+    print(f"{'='*40}")
+    print(f"FINAL TEST RESULTS")
+    print(f"{'='*40}")
+    print(f"Test Loss: {test_loss:.3f}")
+    print(f"Test PPL:  {test_ppl:.3f}")
+    print(f"{'='*40}")
+    
+    return model
 
 
 if __name__ == '__main__':

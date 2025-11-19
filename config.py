@@ -11,20 +11,20 @@ MODEL_SAVE_PATH = "saved_models/seq2seq_model.pt"
 USE_ATTENTION = True
 
 # 词嵌入层维度
-EMBEDDING_DIM = 256
+EMBEDDING_DIM = 128
 
 # GRU 隐藏层维度
-HIDDEN_DIM = 512
+HIDDEN_DIM = 256
 
 # GRU 层数
-N_LAYERS = 2
+N_LAYERS = 1
 
 # Dropout 概率 (用于防止过拟合)
-DROPOUT = 0.5
+DROPOUT = 0.6
 
 # --- 训练超参数 ---
 # 批量大小
-BATCH_SIZE = 
+BATCH_SIZE = 64
 
 # 训练轮次 (Epochs)
 N_EPOCHS = 20
