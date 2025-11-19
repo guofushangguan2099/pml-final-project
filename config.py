@@ -24,7 +24,7 @@ DROPOUT = 0.5
 
 # --- 训练超参数 ---
 # 批量大小
-BATCH_SIZE = 128
+BATCH_SIZE = 
 
 # 训练轮次 (Epochs)
 N_EPOCHS = 20
