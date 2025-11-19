@@ -105,6 +105,17 @@ def run_preprocessing():
     df['modern_numerical'] = df['modern_clean'].apply(modern_vocab.numericalize)
     df['shakespearean_numerical'] = df['shakespearean_clean'].apply(shakespeare_vocab.numericalize)
     
+
+
+    print("\n" + "="*60)
+    print("👀 PREVIEW: Top 5 Cleaned Sentences")
+    print("="*60)
+    for i in range(min(5, len(df))):
+        print(f"Row {i}:")
+        print(f"  [Modern] : {df['modern_clean'].iloc[i]}")
+        print(f"  [Shakes] : {df['shakespearean_clean'].iloc[i]}")
+        print("-" * 60)
+    print("="*60 + "\n")
     # 保存文件
     if not os.path.exists(SAVE_DIR):
         os.makedirs(SAVE_DIR)
@@ -122,5 +133,15 @@ def run_preprocessing():
     print(f"Modern Vocab Size: {modern_vocab.n_words}")
     print(f"Shakespeare Vocab Size: {shakespeare_vocab.n_words}")
 
+
+    with open(os.path.join(SAVE_DIR, 'modern_vocab.pkl'), 'wb') as f:
+        pickle.dump(modern_vocab, f)
+            
+    with open(os.path.join(SAVE_DIR, 'shakespearean_vocab.pkl'), 'wb') as f:
+        pickle.dump(shakespeare_vocab, f)
+            
+    print("✅ Done! New data is ready.")
+    print(f"Modern Vocab Size: {modern_vocab.n_words}")
+    print(f"Shakespeare Vocab Size: {shakespeare_vocab.n_words}")
 if __name__ == "__main__":
     run_preprocessing()
