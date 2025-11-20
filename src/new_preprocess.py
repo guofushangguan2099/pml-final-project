@@ -6,7 +6,7 @@ from collections import Counter
 
 # --- 配置 ---
 # 请确保 final.csv 和这个脚本在同一个文件夹，或者修改这里的路径
-CSV_PATH = 'data\\final.csv' 
+CSV_PATH = os.path.join('data', 'final.csv')
 SAVE_DIR = 'data'
 MIN_FREQ = 2  # 关键！去掉只出现一次的词，大幅降低噪音
 

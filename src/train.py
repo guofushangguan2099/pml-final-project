@@ -11,7 +11,7 @@ import time
 import math
 
 # --- 导入我们自己的模块 ---
-from .model import Encoder, Attention, Decoder, Seq2Seq
+from model import Encoder, Attention, Decoder, Seq2Seq
 from config import (
     DATA_PATH, MODEL_SAVE_PATH, EMBEDDING_DIM, HIDDEN_DIM, N_LAYERS,
     DROPOUT, BATCH_SIZE, N_EPOCHS, LEARNING_RATE, TEACHER_FORCING_RATIO,
@@ -19,7 +19,7 @@ from config import (
 )
 
 # --- 1. 数据集类和数据加载器 ---
-from .preprocess import Vocabulary
+from new_preprocess import Vocabulary
 class TranslationDataset(Dataset):
     def __init__(self, df):
         self.df = df
