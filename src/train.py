@@ -171,12 +171,29 @@ def run_training():
 
     # 5. 定义优化器和损失函数
     # ✅ 关键修改：添加 weight_decay=1e-5 进行正则化
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
-    criterion = nn.CrossEntropyLoss(ignore_index=PAD_IDX)
+    optimizer = optim.Adam(
+    model.parameters(), 
+    lr=LEARNING_RATE,
+    weight_decay=1e-4,      # L2 正则化（原来是 1e-5，增强到 5e-5）
+    betas=(0.9, 0.98),      # Adam 的动量参数（更适合 NLP）
+    eps=1e-9                # 数值稳定性
+)
+    criterion = nn.CrossEntropyLoss(
+    ignore_index=PAD_IDX,
+    # label_smoothing=0.1     # 防止模型过度自信
+)
+    from torch.optim.lr_scheduler import ReduceLROnPlateau
 
+    scheduler = ReduceLROnPlateau(
+    optimizer,
+    mode='min',              # 监控最小化指标（loss）
+    factor=0.5,              # LR 衰减因子（每次减半）
+    patience=4,              # 4 个 epoch 没改善就降低学习率
+    min_lr=1e-6              # 最小学习率
+)
     # 6. 训练循环 (含早停机制)
     best_valid_loss = float('inf')
-    PATIENCE = 3      # ✅ 早停耐心值：如果验证集3次没有变好就停止
+    PATIENCE = 7      # ✅ 早停耐心值：如果验证集3次没有变好就停止
     patience_counter = 0
     
     print("\n--- Starting Epochs (with Early Stopping) ---")
@@ -187,9 +204,14 @@ def run_training():
         
         # 训练和验证
         train_loss = train_fn(model, train_dataloader, optimizer, criterion, CLIP)
-        valid_loss = evaluate_fn(model, valid_dataloader, criterion)
+        valid_loss = evaluate_fn(model, valid_dataloader, criterion)  # ← 只调用一次
         
-        end_time = time.time()
+        # ✅ 更新学习率
+        scheduler.step(valid_loss)
+        current_lr = optimizer.param_groups[0]['lr']
+        
+        # 计算时间
+        end_time = time.time()  # ← 只计算一次
         epoch_mins, epoch_secs = epoch_time(start_time, end_time)
         
         # 计算 PPL
@@ -206,7 +228,7 @@ def run_training():
             patience_counter += 1
             save_msg = f"⚠️ No Improvement ({patience_counter}/{PATIENCE})"
         
-        print(f'Epoch: {epoch+1:02} | Time: {epoch_mins}m {epoch_secs}s | {save_msg}')
+        print(f'Epoch: {epoch+1:02} | Time: {epoch_mins}m {epoch_secs}s | LR: {current_lr:.6f} | {save_msg}')
         print(f'\tTrain Loss: {train_loss:.3f} | Train PPL: {train_ppl:7.3f}')
         print(f'\t Val. Loss: {valid_loss:.3f} |  Val. PPL: {val_ppl:7.3f}')
         

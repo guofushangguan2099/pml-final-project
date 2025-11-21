@@ -31,7 +31,6 @@ class Encoder(nn.Module):
         outputs, hidden = self.rnn(embedded)
         # outputs [batch_size, src_len, hid_dim]
         # hidden [n_layers, batch_size, hid_dim]
-        
         return outputs, hidden
 
 # --- 模块 2: 注意力机制 (Attention) ---
