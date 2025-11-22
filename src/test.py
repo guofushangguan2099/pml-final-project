@@ -9,9 +9,7 @@ import math
 import argparse
 from collections import Counter
 
-# ==========================================
-# 1. 内置 Vocabulary 类 (无需从外部导入)
-# ==========================================
+# Vocabulary class for token mapping
 class Vocabulary:
     def __init__(self, name):
         self.name = name
@@ -36,25 +34,18 @@ class Vocabulary:
             for word in sentence.split()
         ]
 
-# ==========================================
-# 2. Pickle 路径急救包 (关键！)
-# ==========================================
-# 如果你的 pickle 文件是用 new_preprocess.Vocabulary 保存的，
-# 加载时它会去 new_preprocess 里找这个类。
-# 这里我们手动创建一个假的 new_preprocess 模块，或者给现有的打补丁。
+# Pickle compatibility fix
+# If vocab was saved from new_preprocess module, inject our class there
 try:
     import new_preprocess
 except ImportError:
-    # 如果文件不存在，创建一个假的模块
     import types
     new_preprocess = types.ModuleType('new_preprocess')
     sys.modules['new_preprocess'] = new_preprocess
 
-# 强制把我们这里定义的 Vocabulary 类注入到 new_preprocess 模块中
-# 这样 pickle.load 就能找到了
 new_preprocess.Vocabulary = Vocabulary
 
-# 确保能导入其他模块 (config, model)
+# Setup import paths
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -62,17 +53,12 @@ try:
     from model import Encoder, Attention, Decoder, Seq2Seq
     from config import *
 except ImportError:
-    print("❌ 错误: 找不到 model.py 或 config.py，请确保你在 src 目录下或项目根目录下")
+    print("❌ Error: Cannot find model.py or config.py")
     sys.exit(1)
 
-# ==========================================
-# 3. 工具函数 & Beam Search
-# ==========================================
-
 def load_vocab():
-    """加载词汇表"""
+    """Load vocabulary files with pickle compatibility patch"""
     vocab_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
-    # 使用 sys.modules 里的补丁，pickle 应该能正常加载
     with open(os.path.join(vocab_dir, 'modern_vocab.pkl'), 'rb') as f:
         modern_vocab = pickle.load(f)
     with open(os.path.join(vocab_dir, 'shakespearean_vocab.pkl'), 'rb') as f:
@@ -80,7 +66,7 @@ def load_vocab():
     return modern_vocab, shakespearean_vocab
 
 def load_model(modern_vocab, shakespearean_vocab, device):
-    """加载模型"""
+    """Initialize model and load trained weights"""
     INPUT_DIM = modern_vocab.n_words
     OUTPUT_DIM = shakespearean_vocab.n_words
     
@@ -95,22 +81,23 @@ def load_model(modern_vocab, shakespearean_vocab, device):
         
     if os.path.exists(model_path):
         model.load_state_dict(torch.load(model_path, map_location=device))
-        print(f"✅ 已加载模型: {model_path}")
+        print(f"✅ Model loaded: {model_path}")
     else:
-        print(f"❌ 错误: 找不到模型文件 {model_path}")
+        print(f"❌ Error: Model file not found at {model_path}")
         sys.exit(1)
         
     model.eval()
     return model
 
 def preprocess_text(text):
+    """Normalize and add special tokens"""
     text = text.lower().strip()
     text = re.sub(r"([?.!,:;\"'()\-])", r" \1 ", text)
     text = re.sub(r'[" "]+', " ", text)
     return f"<s> {text.strip()} </s>"
 
 def translate_sentence_beam(sentence, model, modern_vocab, shakespearean_vocab, device, max_len=50, beam_width=5):
-    """Beam Search 翻译核心逻辑"""
+    """Beam search translation"""
     model.eval()
     processed = preprocess_text(sentence)
     tokens = [modern_vocab.word2idx.get(word, modern_vocab.word2idx['<unk>']) for word in processed.split()]
@@ -135,7 +122,6 @@ def translate_sentence_beam(sentence, model, modern_vocab, shakespearean_vocab, 
                 output, next_hidden = model.decoder(input_token, curr_hidden, encoder_outputs)
                 probs = torch.softmax(output, dim=1)
                 
-                # Top K
                 topk_probs, topk_ids = torch.topk(probs, beam_width * 2)
                 
                 for i in range(beam_width * 2):
@@ -144,7 +130,7 @@ def translate_sentence_beam(sentence, model, modern_vocab, shakespearean_vocab, 
                     new_score = score + math.log(word_prob + 1e-10)
                     new_candidates.append((new_score, next_hidden, seq + [word_idx]))
             
-            # 排序并剪枝
+            # Keep top beam_width candidates
             candidates = sorted(new_candidates, key=lambda x: x[0], reverse=True)[:beam_width]
             if all(c[2][-1] == end_token for c in candidates): break
                 
@@ -153,23 +139,19 @@ def translate_sentence_beam(sentence, model, modern_vocab, shakespearean_vocab, 
         result = [t for t in trg_tokens if t not in ['<s>', '</s>', '<pad>']]
         return ' '.join(result)
 
-# ==========================================
-# 4. 主程序
-# ==========================================
-
 def calculate_bleu(n_samples=100):
+    """Evaluate model with BLEU scores"""
     print("="*70)
-    print(f"📊 计算 BLEU 分数 (Beam Width: 5)")
+    print(f"📊 Calculating BLEU (Beam Width: 5)")
     print("="*70)
     
-    # 动态导入 nltk
     try:
         from nltk.translate.bleu_score import corpus_bleu
         import nltk
         try: nltk.data.find('tokenizers/punkt')
         except LookupError: nltk.download('punkt', quiet=True)
     except ImportError:
-        print("⚠️ 请安装 nltk: pip install nltk")
+        print("⚠️ Please install nltk: pip install nltk")
         return
 
     import pandas as pd
@@ -179,38 +161,33 @@ def calculate_bleu(n_samples=100):
     data_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'processed_data.pkl')
     df = pd.read_pickle(data_path)
     
-    # 选取测试集 (后 15%)
+    # Use last 15% as test set
     test_start_idx = int(0.85 * len(df))
     test_df = df[test_start_idx:]
     test_samples = test_df.sample(min(n_samples, len(test_df)))
     
     references, hypotheses = [], []
-    print(f"正在处理 {len(test_samples)} 条数据...")
+    print(f"Processing {len(test_samples)} samples...")
     
     for idx, row in test_samples.iterrows():
         modern = row['modern_clean'].replace('<s>', '').replace('</s>', '').strip()
         shake = row['shakespearean_clean'].replace('<s>', '').replace('</s>', '').strip()
         
-        # Beam Search
         pred = translate_sentence_beam(modern, model, modern_vocab, shakespearean_vocab, DEVICE)
         
         references.append([shake.split()])
         hypotheses.append(pred.split())
         
-        if len(hypotheses) % 50 == 0: print(f"  已完成 {len(hypotheses)}")
+        if len(hypotheses) % 50 == 0: print(f"  Completed {len(hypotheses)}")
     
-    # 打印结果
-    b1 = corpus_bleu(references, hypotheses, weights=(1, 0, 0, 0))
-    b4 = corpus_bleu(references, hypotheses, weights=(0.25, 0.25, 0.25, 0.25))
-    
-# 计算所有分数
+    # Calculate all BLEU scores
     b1 = corpus_bleu(references, hypotheses, weights=(1, 0, 0, 0))
     b2 = corpus_bleu(references, hypotheses, weights=(0.5, 0.5, 0, 0))
     b3 = corpus_bleu(references, hypotheses, weights=(0.33, 0.33, 0.33, 0))
     b4 = corpus_bleu(references, hypotheses, weights=(0.25, 0.25, 0.25, 0.25))
     
     print("\n" + "="*30)
-    print(f"✅ 最终结果")
+    print(f"✅ Final Results")
     print("="*30)
     print(f"BLEU-1: {b1:.4f}")
     print(f"BLEU-2: {b2:.4f}")
@@ -226,7 +203,6 @@ if __name__ == "__main__":
     if args.mode == 'bleu':
         calculate_bleu(args.n_samples)
     elif args.mode == 'interactive':
-        # 简单的交互模式
         mod, shk = load_vocab()
         mdl = load_model(mod, shk, DEVICE)
         while True:
