@@ -8,7 +8,7 @@ from collections import Counter
 # 请确保 final.csv 和这个脚本在同一个文件夹，或者修改这里的路径
 CSV_PATH = os.path.join('data', 'final.csv')
 SAVE_DIR = 'data'
-MIN_FREQ = 2  # 关键！去掉只出现一次的词，大幅降低噪音
+MIN_FREQ = 5  # 关键！去掉只出现一次的词，大幅降低噪音
 
 # --- 1. 强力清洗函数 ---
 def clean_text(text):

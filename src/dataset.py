@@ -11,16 +11,16 @@ def load_and_prepare_data(data_path='final.csv'):
     Returns:
         pandas.DataFrame: A DataFrame with 'modern' and 'shakespearean' columns.
     """
-    # 检查文件是否存在
+    # Check if the file exists
     if not os.path.exists(data_path):
         print(f"Error: Data file not found at {data_path}")
         return None
 
-    # 使用pandas加载CSV文件
+    # Load the CSV file using pandas
     df = pd.read_csv(data_path)
 
-    # 为了方便，我们可以重命名列名（如果需要的话）
-    # 假设原始列名是 'Modern English' 和 'Shakespeare English'
+    # Rename columns for convenience (if necessary)
+    # Assuming original column names are 'Modern English' and 'Shakespeare English'
     df.rename(columns={
         'Modern English': 'modern',
         'Shakespeare English': 'shakespearean'
@@ -29,16 +29,16 @@ def load_and_prepare_data(data_path='final.csv'):
     print("Successfully loaded the dataset.")
     print(f"Total number of sentence pairs: {len(df)}")
 
-    # 打印前5行数据进行验证
+    # Print the first 5 rows for verification
     print("\nData Head:")
     print(df.head())
 
-    # 检查是否有缺失值
+    # Check for missing values
     print("\nMissing values check:")
     print(df.isnull().sum())
 
     return df
 
-# --- 在主脚本中调用 ---
+# --- Call from the main script ---
 if __name__ == '__main__':
     dataframe = load_and_prepare_data()
