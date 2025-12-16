@@ -1,0 +1,15 @@
+# Core Deep Learning Framework
+torch>=2.0.0
+
+# Data Manipulation
+pandas>=1.3.0
+numpy>=1.21.0
+
+# Text Processing (Likely used in preprocess.py)
+# If you used nltk.word_tokenize:
+nltk>=3.6.0
+# If you used spacy:
+# spacy>=3.0.0 
+
+# Utilities (Optional but recommended)
+tqdm>=4.60.0  # Great for progress bars instead of simple print statements

@@ -96,17 +96,56 @@ def preprocess_text(text):
     text = re.sub(r'[" "]+', " ", text)
     return f"<s> {text.strip()} </s>"
 
+# ==================================================================================
+# 新增辅助函数：利用 Attention 替换 <unk>
+# ==================================================================================
+def post_process_unk_with_attention(best_seq_tokens, model, src_tensor, modern_vocab, device):
+    """
+    策略：拿着 Beam Search 找到的最好 Token 序列，重新跑一遍 Decoder，
+    获取 Attention 矩阵，把 <unk> 替换为原句中 Attention 权重最大的词。
+    """
+    model.eval()
+    
+    # 1. 重新编码
+    with torch.no_grad():
+        encoder_outputs, hidden = model.encoder(src_tensor)
+        
+        # 准备结果容器
+        final_words = []
+        
+        # 2. 逐个 Token 模拟生成过程，为了获取 Attention
+        # best_seq_tokens 是 Beam Search 找出来的 ID 列表 (包含 <s>, 不一定包含 </s>)
+        
+        input_token = torch.tensor([best_seq_tokens[0]]).to(device) # <s>
+        
+        for i in range(1, len(best_seq_tokens)):
+            current_target_idx = best_seq_tokens[i]
+            
+            # 前向传播
+            output, hidden, attention = model.decoder(input_token, hidden, encoder_outputs)
+            # attention: [1, src_len]
+            
+            # 获取当前词
+            word = model.decoder.output_dim # 临时
+            # 这里的 vocab 需要从外部获取，或者假定是在 shakespearean_vocab
+            # 为了简化，我们只返回 attention map 和 index，在外部做字符替换
+            
+            # 下一步输入
+            input_token = torch.tensor([current_target_idx]).to(device)
+            
+            final_words.append((current_target_idx, attention))
+            
+    return final_words
+
+# ==================================================================================
+# 修改后的 translate_sentence_beam
+# ==================================================================================
 def translate_sentence_beam(sentence, model, modern_vocab, shakespearean_vocab, device, max_len=50, beam_width=5):
-    """Beam search with Length Penalty AND Minimum Length Constraint"""
+    """Beam search with UNK Replacement Post-Processing"""
     model.eval()
     processed = preprocess_text(sentence)
     
-    # [Debug] 打印，确认我们用的是这个函数
-    print(f"  [Debug] Cleaned Text_beam2: {processed}", flush=True) 
-    
     tokens = [modern_vocab.word2idx.get(word, modern_vocab.word2idx['<unk>']) for word in processed.split()]
-    print(f"  [Debug] Token IDs: {tokens}", flush=True)
-
     src_tensor = torch.LongTensor(tokens).unsqueeze(0).to(device)
     
     with torch.no_grad():
@@ -114,62 +153,74 @@ def translate_sentence_beam(sentence, model, modern_vocab, shakespearean_vocab, 
         start_token = shakespearean_vocab.word2idx['<s>']
         end_token = shakespearean_vocab.word2idx['</s>']
         
-        # (score, hidden, sequence)
         candidates = [(0.0, hidden, [start_token])]
         
-        for step in range(max_len): # 使用 step 变量记录当前是第几步
+        for step in range(max_len):
             new_candidates = []
-            
             for score, curr_hidden, seq in candidates:
                 if seq[-1] == end_token:
                     new_candidates.append((score, curr_hidden, seq))
                     continue
                 
                 input_token = torch.LongTensor([seq[-1]]).to(device)
-                output, next_hidden, aSqueeze = model.decoder(input_token, curr_hidden, encoder_outputs)
+                output, next_hidden, _ = model.decoder(input_token, curr_hidden, encoder_outputs)
                 
-                # =================================================
-                # 🚀 核心修改：如果句子太短，手动封杀 </s> (结束符)
-                # =================================================
-                # 假设我们希望至少输出 3 个词（不含 <s>）
-                MIN_LEN = 3 
-                if len(seq) < MIN_LEN + 1: # +1 是因为 seq 包含 <s>
-                    # 把 </s> 的概率设为负无穷大，绝不让它选
+                # 长度惩罚：太短不让结束
+                MIN_LEN = 3
+                if len(seq) < MIN_LEN + 1:
                     output[:, end_token] = -float('inf')
 
                 probs = torch.softmax(output, dim=1)
-                
                 topk_probs, topk_ids = torch.topk(probs, beam_width * 2)
                 
                 for i in range(beam_width * 2):
                     word_idx = topk_ids[0][i].item()
                     word_prob = topk_probs[0][i].item()
-                    
-                    # 避免 log(0) 错误
                     new_score = score + math.log(word_prob + 1e-10)
                     new_candidates.append((new_score, next_hidden, seq + [word_idx]))
             
-            # =================================================
-            # 🚀 核心修改：加大长度惩罚力度 (alpha 从 0.7 提到 1.2)
-            # alpha 越大，越鼓励长句
-            # =================================================
-            alpha = 1.2 
-            
-            candidates = sorted(
-                new_candidates, 
-                key=lambda x: x[0] / (len(x[2]) ** alpha), 
-                reverse=True
-            )[:beam_width]
+            alpha = 1.0 # 长度惩罚系数
+            candidates = sorted(new_candidates, key=lambda x: x[0] / (len(x[2]) ** alpha), reverse=True)[:beam_width]
             
             if all(c[2][-1] == end_token for c in candidates):
                 break
-                
-        # 选得分最高的
-        best_seq = candidates[0][2]
-        trg_tokens = [shakespearean_vocab.idx2word[i] for i in best_seq]
         
-        # 过滤掉特殊符号
-        result = [t for t in trg_tokens if t not in ['<s>', '</s>', '<pad>']]
+        # === 核心修改：后处理 UNK ===
+        best_seq = candidates[0][2] # 最好的序列 IDs
+        
+        # 1. 转换成单词，准备替换
+        final_output_words = []
+        
+        # 2. 我们需要重新跑一遍这个序列来拿 Attention (因为 Beam Search 没存)
+        # 调用辅助函数
+        # 注意：这里我们简化处理。如果 best_seq 里有 <unk>，我们才去算 Attention
+        
+        has_unk = any(idx == shakespearean_vocab.word2idx['<unk>'] for idx in best_seq)
+        
+        if has_unk:
+             # 重新跑一遍获取 Attention
+             attn_data = post_process_unk_with_attention(best_seq, model, src_tensor, modern_vocab, device)
+             
+             # attn_data 是 list of (word_idx, attention_tensor)
+             for idx, attn in attn_data:
+                 word = shakespearean_vocab.idx2word[idx]
+                 if word == '<unk>':
+                     # 找到原句中 Attention 最大的词
+                     src_idx = attn.argmax(1).item()
+                     # 保护：防止 src_idx 越界 (虽然理论上不会)
+                     if src_idx < len(tokens):
+                         original_token_id = tokens[src_idx]
+                         replacement = modern_vocab.idx2word[original_token_id]
+                         # 如果原句也是 <unk> 或者特殊符号，就不换了
+                         if replacement not in ['<s>', '</s>', '<pad>']:
+                             word = replacement
+                 final_output_words.append(word)
+        else:
+            # 没有 UNK，直接转
+            final_output_words = [shakespearean_vocab.idx2word[idx] for idx in best_seq[1:]] # 跳过 <s>
+
+        # 过滤特殊符号
+        result = [t for t in final_output_words if t not in ['<s>', '</s>', '<pad>']]
         return ' '.join(result)
     
 def translate_sentence_greedy(sentence, model, modern_vocab, shakespearean_vocab, device, max_len=50):
