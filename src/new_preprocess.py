@@ -3,24 +3,41 @@ import re
 import pickle
 import os
 from collections import Counter
+import unicodedata
 
 # --- 配置 ---
-# 请确保 final.csv 和这个脚本在同一个文件夹，或者修改这里的路径
 CSV_PATH = os.path.join('data', 'final.csv')
 SAVE_DIR = 'data'
-MIN_FREQ = 5  # 关键！去掉只出现一次的词，大幅降低噪音
+MIN_FREQ = 3  # 关键！去掉只出现一次的词，大幅降低噪音
 
-# --- 1. 强力清洗函数 ---
-def clean_text(text):
+# --- 1. 强力清洗函数 (已改名为 preprocess_text 以配合 localtest.py) ---
+def unicodeToAscii(s):
+    return ''.join(
+        c for c in unicodedata.normalize('NFD', s)
+        if unicodedata.category(c) != 'Mn'
+    )
+
+def preprocess_text(text):
+    """
+    清洗文本：转小写、分离标点、去除多余符号
+    """
     if not isinstance(text, str):
         return ""
-    text = text.lower().strip()
-    # 关键改进：把冒号、分号、括号、破折号等全部切分开
+    
+    # 1. 转 Unicode 为 ASCII (处理重音符号等)
+    text = unicodeToAscii(text.lower().strip())
+    
+    # 2. 关键改进：把冒号、分号、括号、破折号等全部切分开
     # 例如: "king:" -> "king :"
     text = re.sub(r"([?.!,:;\"'()\-])", r" \1 ", text)
-    # 把多余空格缩减
+    
+    # 3. 把多余空格缩减
     text = re.sub(r'[" "]+', " ", text)
-    return f"<s> {text.strip()} </s>"
+    
+    # 4. 加上开始和结束标记 (对于训练很有用，推理时 Encoder 也能处理)
+    text = f"<s> {text.strip()} </s>"
+    
+    return text
 
 # --- 2. 词汇表构建类 (带频率过滤) ---
 class Vocabulary:
@@ -36,6 +53,7 @@ class Vocabulary:
         print(f"Building vocab for {self.name}...")
         temp_counter = Counter()
         for sentence in sentences:
+            # sentence 已经是经过 preprocess_text 处理过的字符串
             temp_counter.update(sentence.split())
         
         # 2. 只添加超过 min_freq 的词
@@ -63,17 +81,25 @@ def run_preprocessing():
     
     # 检查文件是否存在
     if not os.path.exists(CSV_PATH):
-        print(f"❌ Error: '{CSV_PATH}' not found!")
-        print(f"   Current working directory is: {os.getcwd()}")
-        print("   Please make sure final.csv is in this folder.")
-        return
+        # 尝试在上级目录找 (兼容在 src 目录运行的情况)
+        alt_path = os.path.join('..', 'data', 'final.csv')
+        if os.path.exists(alt_path):
+            csv_path_to_use = alt_path
+            save_dir_to_use = os.path.join('..', 'data')
+        else:
+            print(f"❌ Error: '{CSV_PATH}' not found!")
+            print(f"   Current working directory is: {os.getcwd()}")
+            return
+    else:
+        csv_path_to_use = CSV_PATH
+        save_dir_to_use = SAVE_DIR
     
     try:
         # 增加 encoding='utf-8' 防止 Windows 读取报错
-        df = pd.read_csv(CSV_PATH, encoding='utf-8')
+        df = pd.read_csv(csv_path_to_use, encoding='utf-8')
     except UnicodeDecodeError:
         print("⚠️ UTF-8 failed, trying latin-1...")
-        df = pd.read_csv(CSV_PATH, encoding='latin-1')
+        df = pd.read_csv(csv_path_to_use, encoding='latin-1')
     
     # 自动处理列名
     if 'og' in df.columns and 't' in df.columns:
@@ -85,8 +111,9 @@ def run_preprocessing():
     
     # 清洗文本
     print("\n--- 2. Cleaning Text (Deep Clean) ---")
-    df['modern_clean'] = df['modern'].apply(clean_text)
-    df['shakespearean_clean'] = df['shakespearean'].apply(clean_text)
+    # 注意：这里调用的是 preprocess_text
+    df['modern_clean'] = df['modern'].apply(preprocess_text)
+    df['shakespearean_clean'] = df['shakespearean'].apply(preprocess_text)
     
     print("Example Modern:", df['modern_clean'].iloc[0])
     print("Example Shakespeare:", df['shakespearean_clean'].iloc[0])
@@ -96,7 +123,7 @@ def run_preprocessing():
     modern_vocab = Vocabulary('modern')
     shakespeare_vocab = Vocabulary('shakespearean')
     
-    # 仅使用频率 >= 2 的词
+    # 仅使用频率 >= MIN_FREQ 的词
     modern_vocab.build_vocab(df['modern_clean'], min_freq=MIN_FREQ)
     shakespeare_vocab.build_vocab(df['shakespearean_clean'], min_freq=MIN_FREQ)
     
@@ -105,8 +132,6 @@ def run_preprocessing():
     df['modern_numerical'] = df['modern_clean'].apply(modern_vocab.numericalize)
     df['shakespearean_numerical'] = df['shakespearean_clean'].apply(shakespeare_vocab.numericalize)
     
-
-
     print("\n" + "="*60)
     print("👀 PREVIEW: Top 5 Cleaned Sentences")
     print("="*60)
@@ -116,32 +141,25 @@ def run_preprocessing():
         print(f"  [Shakes] : {df['shakespearean_clean'].iloc[i]}")
         print("-" * 60)
     print("="*60 + "\n")
+
     # 保存文件
-    if not os.path.exists(SAVE_DIR):
-        os.makedirs(SAVE_DIR)
+    if not os.path.exists(save_dir_to_use):
+        os.makedirs(save_dir_to_use)
         
     print("\n--- 5. Saving Files ---")
-    df.to_pickle(os.path.join(SAVE_DIR, 'processed_data.pkl'))
+    df.to_pickle(os.path.join(save_dir_to_use, 'processed_data.pkl'))
     
-    with open(os.path.join(SAVE_DIR, 'modern_vocab.pkl'), 'wb') as f:
+    with open(os.path.join(save_dir_to_use, 'modern_vocab.pkl'), 'wb') as f:
         pickle.dump(modern_vocab, f)
         
-    with open(os.path.join(SAVE_DIR, 'shakespearean_vocab.pkl'), 'wb') as f:
+    with open(os.path.join(save_dir_to_use, 'shakespearean_vocab.pkl'), 'wb') as f:
         pickle.dump(shakespeare_vocab, f)
         
     print("✅ Done! New data is ready.")
     print(f"Modern Vocab Size: {modern_vocab.n_words}")
     print(f"Shakespeare Vocab Size: {shakespeare_vocab.n_words}")
 
-
-    with open(os.path.join(SAVE_DIR, 'modern_vocab.pkl'), 'wb') as f:
-        pickle.dump(modern_vocab, f)
-            
-    with open(os.path.join(SAVE_DIR, 'shakespearean_vocab.pkl'), 'wb') as f:
-        pickle.dump(shakespeare_vocab, f)
-            
-    print("✅ Done! New data is ready.")
-    print(f"Modern Vocab Size: {modern_vocab.n_words}")
-    print(f"Shakespeare Vocab Size: {shakespeare_vocab.n_words}")
+# 只有直接运行此脚本时才执行数据处理
+# 被 import 时不会执行，防止报错
 if __name__ == "__main__":
     run_preprocessing()
